@@ -4,14 +4,37 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
-from typing import Optional
+
+
+def flatten_multiindex_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Flatten MultiIndex columns to single level."""
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = ['_'.join(map(str, col)).strip() for col in df.columns.values]
+    return df
+
+
+def unpack_series_cells(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """
+    Ensure each specified column contains only scalar values,
+    unpack if any cell is a pd.Series or similar.
+    """
+    for col in columns:
+        if col in df.columns:
+            # Check if any cell is a Series
+            mask = df[col].apply(lambda x: isinstance(x, (pd.Series, np.ndarray, list)))
+            if mask.any():
+                df.loc[mask, col] = df.loc[mask, col].apply(
+                    lambda x: float(x.iloc[0]) if isinstance(x, pd.Series) else
+                              float(x[0]) if isinstance(x, (list, np.ndarray)) else
+                              x
+                )
+            else:
+                # Just ensure float type overall
+                df[col] = df[col].astype(float)
+    return df
 
 
 def to_float_safe(val) -> float:
-    """
-    Safely convert input to float scalar.
-    Raises if input is array-like with length > 1.
-    """
     if isinstance(val, (pd.Series, np.ndarray, list)):
         if len(val) == 1:
             return float(val[0])
@@ -20,73 +43,51 @@ def to_float_safe(val) -> float:
     return float(val)
 
 
-def calculate_heaviness(
-    open_price: float,
-    close_price: float,
-    volume: float,
-    prev_day_range: float
-) -> Optional[float]:
-    """
-    Calculate heaviness indicator percentage (H%).
-
-    Returns None if inputs invalid or calculation not possible.
-    """
+def calculate_heaviness(open_price, close_price, volume, prev_day_range):
     try:
         if volume <= 0 or prev_day_range <= 0 or np.isnan(volume) or np.isnan(prev_day_range):
-            return None
-
-        delta_per_volume = (close_price - open_price) / volume
-        heaviness_raw = (delta_per_volume / prev_day_range) * 100
-        heaviness_score = 100 - abs(heaviness_raw * 100)
-        return max(0.0, min(100.0, heaviness_score))
-
+            return np.nan
+        delta_p_per_volume = (close_price - open_price) / volume
+        heaviness = (delta_p_per_volume / prev_day_range) * 100
+        score = 100 - abs(heaviness * 100)
+        return max(0.0, min(100.0, score))
     except Exception:
-        return None
+        return np.nan
 
 
-def backtest_heaviness(
-    df: pd.DataFrame,
-    threshold: float = 20.0,
-    hold_minutes: int = 15
-) -> pd.DataFrame:
+def backtest_heaviness(df, threshold=20, hold_minutes=15):
     trades = []
     position = None
 
-    for idx in range(len(df) - hold_minutes):
-        current_row = df.iloc[idx]
-        h_value = current_row.get('H%')
-
-        if pd.isna(h_value) or h_value is None:
+    for i in range(len(df) - hold_minutes):
+        row = df.iloc[i]
+        h = row.get('H%')
+        if pd.isna(h):
             continue
+        timestamp = pd.Timestamp(row.name)
 
-        timestamp = pd.Timestamp(current_row.name)
-
-        if position is None and h_value < threshold:
-            position = {
-                'entry_time': timestamp,
-                'entry_price': current_row['Close']
-            }
+        if position is None and h < threshold:
+            position = {'entry_time': timestamp, 'entry_price': row['Close']}
             continue
 
         if position is not None:
             elapsed = timestamp - position['entry_time']
-            if isinstance(elapsed, pd.Timedelta) and elapsed >= timedelta(minutes=hold_minutes):
-                exit_price = current_row['Close']
-                trade_return = (exit_price - position['entry_price']) / position['entry_price']
+            if elapsed >= timedelta(minutes=hold_minutes):
+                exit_price = row['Close']
+                ret = (exit_price - position['entry_price']) / position['entry_price']
                 trades.append({
                     'entry': position['entry_time'],
                     'exit': timestamp,
                     'entry_price': position['entry_price'],
                     'exit_price': exit_price,
-                    'return': trade_return
+                    'return': ret
                 })
                 position = None
-
     return pd.DataFrame(trades)
 
 
-def load_data(ticker: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
-    data = yf.download(
+def load_data(ticker, start_date, end_date):
+    df = yf.download(
         ticker,
         start=start_date,
         end=end_date,
@@ -94,13 +95,14 @@ def load_data(ticker: str, start_date: datetime, end_date: datetime) -> pd.DataF
         progress=False,
         auto_adjust=True,
         threads=True,
+        group_by='ticker'
     )
-    if data.empty:
-        raise ValueError(f"No intraday data found for {ticker} between {start_date} and {end_date}")
-    return data
+    df = flatten_multiindex_columns(df)
+    df = unpack_series_cells(df, ['Open', 'Close', 'Volume'])
+    return df
 
 
-def load_daily_data(ticker: str, start_date: datetime, end_date: datetime) -> pd.Series:
+def load_daily_data(ticker, start_date, end_date):
     daily = yf.download(
         ticker,
         start=start_date - timedelta(days=7),
@@ -108,23 +110,13 @@ def load_daily_data(ticker: str, start_date: datetime, end_date: datetime) -> pd
         interval='1d',
         progress=False,
         auto_adjust=True,
-        threads=True,
+        threads=True
     )
-    if daily.empty:
-        raise ValueError(f"No daily data found for {ticker} between {start_date} and {end_date}")
-    prev_day_range = (daily['High'] - daily['Low']).shift(1).dropna()
-    prev_day_range.index = prev_day_range.index.date
-    return prev_day_range
-
-
-def safe_prev_range_lookup(d, prev_range_series):
-    val = prev_range_series.get(d, np.nan)
-    if isinstance(val, (pd.Series, list, np.ndarray)):
-        if len(val) > 0:
-            return val[0]
-        else:
-            return np.nan
-    return val
+    daily = flatten_multiindex_columns(daily)
+    daily = unpack_series_cells(daily, ['High', 'Low'])
+    prev_range = (daily['High'] - daily['Low']).shift(1).dropna()
+    prev_range.index = prev_range.index.date
+    return prev_range
 
 
 def main():
@@ -135,8 +127,8 @@ def main():
     start_date = st.date_input("Start Date", value=datetime.today() - timedelta(days=7))
     end_date = st.date_input("End Date", value=datetime.today())
 
-    threshold = st.slider("H% Buy Threshold", min_value=0, max_value=100, value=20)
-    hold_period = st.slider("Hold Period (minutes)", min_value=1, max_value=60, value=15)
+    threshold = st.slider("H% Buy Threshold", 0, 100, 20)
+    hold_period = st.slider("Hold Period (minutes)", 1, 60, 15)
 
     if start_date >= end_date:
         st.error("Start Date must be before End Date.")
@@ -144,30 +136,23 @@ def main():
 
     if st.button("Run Analysis"):
         try:
-            with st.spinner("Downloading data..."):
+            with st.spinner("Downloading intraday data..."):
                 intraday_df = load_data(ticker, start_date, end_date)
+            with st.spinner("Downloading daily data..."):
                 prev_range_series = load_daily_data(ticker, start_date, end_date)
 
-            intraday_df = intraday_df.copy()
             intraday_df['Date'] = intraday_df.index.date
-            intraday_df['PrevRange'] = intraday_df['Date'].map(lambda d: safe_prev_range_lookup(d, prev_range_series))
+            intraday_df['PrevRange'] = intraday_df['Date'].map(lambda d: prev_range_series.get(d, np.nan))
 
             def safe_calc(row):
                 try:
-                    # Debug info for rare rows to detect issues
-                    if np.random.rand() < 0.01:
-                        st.write(
-                            f"DEBUG row types - Open: {type(row['Open'])}, Close: {type(row['Close'])}, "
-                            f"Volume: {type(row['Volume'])}, PrevRange: {type(row['PrevRange'])}"
-                        )
-                    return calculate_heaviness(
-                        to_float_safe(row['Open']),
-                        to_float_safe(row['Close']),
-                        to_float_safe(row['Volume']),
-                        to_float_safe(row['PrevRange']) if not pd.isna(row['PrevRange']) else np.nan
-                    )
+                    open_p = to_float_safe(row['Open'])
+                    close_p = to_float_safe(row['Close'])
+                    volume = to_float_safe(row['Volume'])
+                    prev_r = to_float_safe(row['PrevRange']) if not pd.isna(row['PrevRange']) else np.nan
+                    return calculate_heaviness(open_p, close_p, volume, prev_r)
                 except Exception as e:
-                    st.write(f"DEBUG safe_calc error: {e}, row: {row.name}")
+                    st.write(f"DEBUG safe_calc error: {e}, row index: {row.name}")
                     return np.nan
 
             intraday_df['H%'] = intraday_df.apply(safe_calc, axis=1)
