@@ -5,11 +5,22 @@ import numpy as np
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 
-# Heaviness indicator function
+# Heaviness indicator function with safe scalar conversion
 def calculate_heaviness(open_price, close_price, volume, prev_day_range):
-    # Handle NaN and zero cases safely
-    if pd.isna(volume) or pd.isna(prev_day_range) or volume == 0 or prev_day_range == 0:
+    # Force scalars to avoid ambiguous Series comparison
+    try:
+        volume = float(volume)
+    except Exception:
         return np.nan
+
+    try:
+        prev_day_range = float(prev_day_range)
+    except Exception:
+        return np.nan
+
+    if np.isnan(volume) or np.isnan(prev_day_range) or volume == 0 or prev_day_range == 0:
+        return np.nan
+
     delta_p_per_volume = (close_price - open_price) / volume
     heaviness = (delta_p_per_volume / prev_day_range) * 100
     return max(0, min(100, 100 - abs(heaviness * 100)))
@@ -66,7 +77,7 @@ if st.button("Run Analysis"):
         intraday_df = data.copy()
         intraday_df['Date'] = intraday_df.index.date
         
-        # FIX: Ensure PrevRange is a scalar float
+        # Ensure PrevRange is scalar float
         def get_prev_range(d):
             matches = prev_day_range.loc[prev_day_range.index.date == d]
             return float(matches.values[0]) if len(matches) > 0 else np.nan
@@ -104,4 +115,3 @@ if st.button("Run Analysis"):
             ax.set_xlabel("Time")
             ax.legend()
             st.pyplot(fig)
-
