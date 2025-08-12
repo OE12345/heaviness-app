@@ -5,19 +5,12 @@ import numpy as np
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 
-
 def flatten_multiindex_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Flatten MultiIndex columns to single level."""
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = ['_'.join(map(str, col)).strip() for col in df.columns.values]
     return df
 
-
 def unpack_series_cells(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    """
-    Ensure each specified column contains only scalar values,
-    unpack if any cell is a pd.Series or similar.
-    """
     for col in columns:
         if col in df.columns:
             mask = df[col].apply(lambda x: isinstance(x, (pd.Series, np.ndarray, list)))
@@ -31,7 +24,6 @@ def unpack_series_cells(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
                 df[col] = df[col].astype(float)
     return df
 
-
 def to_float_safe(val) -> float:
     if isinstance(val, (pd.Series, np.ndarray, list)):
         if len(val) == 1:
@@ -39,7 +31,6 @@ def to_float_safe(val) -> float:
         else:
             raise ValueError(f"Expected scalar but got array/series with length {len(val)}")
     return float(val)
-
 
 def calculate_heaviness(open_price, close_price, volume, prev_day_range):
     try:
@@ -52,22 +43,18 @@ def calculate_heaviness(open_price, close_price, volume, prev_day_range):
     except Exception:
         return np.nan
 
-
 def backtest_heaviness(df, threshold=20, hold_minutes=15):
     trades = []
     position = None
-
     for i in range(len(df) - hold_minutes):
         row = df.iloc[i]
         h = row.get('H%')
         if pd.isna(h):
             continue
         timestamp = pd.Timestamp(row.name)
-
         if position is None and h < threshold:
             position = {'entry_time': timestamp, 'entry_price': row['Close']}
             continue
-
         if position is not None:
             elapsed = timestamp - position['entry_time']
             if elapsed >= timedelta(minutes=hold_minutes):
@@ -83,47 +70,49 @@ def backtest_heaviness(df, threshold=20, hold_minutes=15):
                 position = None
     return pd.DataFrame(trades)
 
-
 def load_data(ticker, start_date, end_date):
-    df = yf.download(
-        ticker,
-        start=start_date,
-        end=end_date,
-        interval='1m',
-        progress=False,
-        auto_adjust=True,
-        threads=True,
-        group_by='ticker'
-    )
+    df = yf.download(ticker, start=start_date, end=end_date, interval='1m', progress=False, auto_adjust=True)
+    
+    st.write(f"Raw intraday columns: {df.columns.tolist()}")  # Debug
+    
     df = flatten_multiindex_columns(df)
+    st.write(f"Flattened intraday columns: {df.columns.tolist()}")  # Debug
+    
+    # Map to standard names
+    col_map = {}
+    for col in df.columns:
+        lower_col = col.lower()
+        if 'open' in lower_col:
+            col_map[col] = 'Open'
+        elif 'close' in lower_col:
+            col_map[col] = 'Close'
+        elif 'volume' in lower_col:
+            col_map[col] = 'Volume'
+    df.rename(columns=col_map, inplace=True)
+    
+    missing_cols = [c for c in ['Open', 'Close', 'Volume'] if c not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing expected columns in intraday data: {missing_cols}")
+
     df = unpack_series_cells(df, ['Open', 'Close', 'Volume'])
+    
     return df
 
-
 def load_daily_data(ticker, start_date, end_date):
-    daily = yf.download(
-        ticker,
-        start=start_date - timedelta(days=7),
-        end=end_date + timedelta(days=1),
-        interval='1d',
-        progress=False,
-        auto_adjust=True,
-        threads=True
-    )
+    daily = yf.download(ticker, start=start_date - timedelta(days=7), end=end_date + timedelta(days=1), interval='1d', progress=False, auto_adjust=True)
+    st.write(f"Raw daily columns: {daily.columns.tolist()}")  # Debug
     daily = flatten_multiindex_columns(daily)
-    # Detect High/Low column names dynamically:
+    st.write(f"Flattened daily columns: {daily.columns.tolist()}")  # Debug
+    
     high_col = next((col for col in daily.columns if col.lower().startswith('high')), None)
     low_col = next((col for col in daily.columns if col.lower().startswith('low')), None)
-
     if not high_col or not low_col:
         raise ValueError(f"Could not find High/Low columns in daily data. Columns found: {daily.columns.tolist()}")
-
+    
     daily = unpack_series_cells(daily, [high_col, low_col])
-
     prev_range = (daily[high_col] - daily[low_col]).shift(1).dropna()
     prev_range.index = prev_range.index.date
     return prev_range
-
 
 def main():
     st.set_page_config(page_title="Heaviness Indicator Backtester", layout="wide")
@@ -199,7 +188,6 @@ def main():
 
         except Exception as e:
             st.error(f"Error during analysis: {e}")
-
 
 if __name__ == "__main__":
     main()
