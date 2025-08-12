@@ -44,16 +44,19 @@ def backtest_heaviness(df, threshold=20, hold_minutes=15):
             }
             entry_time = row.name
 
-        elif position is not None and (row.name - entry_time) >= timedelta(minutes=hold_minutes):
-            exit_price = df.iloc[i]['Close']
-            trades.append({
-                'entry': entry_time,
-                'exit': row.name,
-                'entry_price': position['entry_price'],
-                'exit_price': exit_price,
-                'return': (exit_price - position['entry_price']) / position['entry_price']
-            })
-            position = None
+        elif position is not None:
+            # Calculate timedelta safely
+            delta = row.name - entry_time
+            if isinstance(delta, pd.Timedelta) and delta >= timedelta(minutes=hold_minutes):
+                exit_price = df.iloc[i]['Close']
+                trades.append({
+                    'entry': entry_time,
+                    'exit': row.name,
+                    'entry_price': position['entry_price'],
+                    'exit_price': exit_price,
+                    'return': (exit_price - position['entry_price']) / position['entry_price']
+                })
+                position = None
 
     return pd.DataFrame(trades)
 
