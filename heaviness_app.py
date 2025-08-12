@@ -90,11 +90,13 @@ if st.button("Run Analysis"):
             matches = prev_day_range.loc[prev_day_range.index.date == d]
             if matches.empty:
                 return np.nan
-            return float(matches.iloc[0])
+            return float(matches.iat[0])  # iat[0] returns scalar
 
         intraday_df = data.copy()
         intraday_df['Date'] = intraday_df.index.date
-        intraday_df['PrevRange'] = intraday_df['Date'].map(get_prev_range)
+
+        # Use apply instead of map to ensure scalar results
+        intraday_df['PrevRange'] = intraday_df['Date'].apply(get_prev_range)
 
         # Calculate H% safely
         intraday_df['H%'] = intraday_df.apply(
