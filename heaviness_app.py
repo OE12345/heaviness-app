@@ -20,7 +20,6 @@ def unpack_series_cells(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     """
     for col in columns:
         if col in df.columns:
-            # Check if any cell is a Series
             mask = df[col].apply(lambda x: isinstance(x, (pd.Series, np.ndarray, list)))
             if mask.any():
                 df.loc[mask, col] = df.loc[mask, col].apply(
@@ -29,7 +28,6 @@ def unpack_series_cells(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
                               x
                 )
             else:
-                # Just ensure float type overall
                 df[col] = df[col].astype(float)
     return df
 
@@ -113,8 +111,16 @@ def load_daily_data(ticker, start_date, end_date):
         threads=True
     )
     daily = flatten_multiindex_columns(daily)
-    daily = unpack_series_cells(daily, ['High', 'Low'])
-    prev_range = (daily['High'] - daily['Low']).shift(1).dropna()
+    # Detect High/Low column names dynamically:
+    high_col = next((col for col in daily.columns if col.lower().startswith('high')), None)
+    low_col = next((col for col in daily.columns if col.lower().startswith('low')), None)
+
+    if not high_col or not low_col:
+        raise ValueError(f"Could not find High/Low columns in daily data. Columns found: {daily.columns.tolist()}")
+
+    daily = unpack_series_cells(daily, [high_col, low_col])
+
+    prev_range = (daily[high_col] - daily[low_col]).shift(1).dropna()
     prev_range.index = prev_range.index.date
     return prev_range
 
