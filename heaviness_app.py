@@ -7,9 +7,16 @@ import matplotlib.pyplot as plt
 from typing import Optional
 
 
-def to_float_safe(val):
-    if isinstance(val, pd.Series):
-        return float(val.iloc[0])
+def to_float_safe(val) -> float:
+    """
+    Safely convert input to float scalar.
+    Raises if input is array-like with length > 1.
+    """
+    if isinstance(val, (pd.Series, np.ndarray, list)):
+        if len(val) == 1:
+            return float(val[0])
+        else:
+            raise ValueError(f"Expected scalar but got array/series with length {len(val)}")
     return float(val)
 
 
@@ -19,13 +26,20 @@ def calculate_heaviness(
     volume: float,
     prev_day_range: float
 ) -> Optional[float]:
+    """
+    Calculate heaviness indicator percentage (H%).
+
+    Returns None if inputs invalid or calculation not possible.
+    """
     try:
         if volume <= 0 or prev_day_range <= 0 or np.isnan(volume) or np.isnan(prev_day_range):
             return None
+
         delta_per_volume = (close_price - open_price) / volume
         heaviness_raw = (delta_per_volume / prev_day_range) * 100
         heaviness_score = 100 - abs(heaviness_raw * 100)
         return max(0.0, min(100.0, heaviness_score))
+
     except Exception:
         return None
 
@@ -40,8 +54,8 @@ def backtest_heaviness(
 
     for idx in range(len(df) - hold_minutes):
         current_row = df.iloc[idx]
-
         h_value = current_row.get('H%')
+
         if pd.isna(h_value) or h_value is None:
             continue
 
@@ -78,7 +92,8 @@ def load_data(ticker: str, start_date: datetime, end_date: datetime) -> pd.DataF
         end=end_date,
         interval='1m',
         progress=False,
-        auto_adjust=True  # <-- Explicit to silence warning
+        auto_adjust=True,
+        threads=True,
     )
     if data.empty:
         raise ValueError(f"No intraday data found for {ticker} between {start_date} and {end_date}")
@@ -88,11 +103,12 @@ def load_data(ticker: str, start_date: datetime, end_date: datetime) -> pd.DataF
 def load_daily_data(ticker: str, start_date: datetime, end_date: datetime) -> pd.Series:
     daily = yf.download(
         ticker,
-        start=start_date - timedelta(days=5),
+        start=start_date - timedelta(days=7),
         end=end_date + timedelta(days=1),
         interval='1d',
         progress=False,
-        auto_adjust=True  # <-- Explicit to silence warning
+        auto_adjust=True,
+        threads=True,
     )
     if daily.empty:
         raise ValueError(f"No daily data found for {ticker} between {start_date} and {end_date}")
@@ -101,9 +117,18 @@ def load_daily_data(ticker: str, start_date: datetime, end_date: datetime) -> pd
     return prev_day_range
 
 
+def safe_prev_range_lookup(d, prev_range_series):
+    val = prev_range_series.get(d, np.nan)
+    if isinstance(val, (pd.Series, list, np.ndarray)):
+        if len(val) > 0:
+            return val[0]
+        else:
+            return np.nan
+    return val
+
+
 def main():
     st.set_page_config(page_title="Heaviness Indicator Backtester", layout="wide")
-
     st.title("📉 Heaviness Indicator (H%) & Backtester")
 
     ticker = st.text_input("Enter Stock Ticker", value="AAPL", max_chars=10).upper()
@@ -125,17 +150,24 @@ def main():
 
             intraday_df = intraday_df.copy()
             intraday_df['Date'] = intraday_df.index.date
-            intraday_df['PrevRange'] = intraday_df['Date'].map(lambda d: prev_range_series.get(d, np.nan))
+            intraday_df['PrevRange'] = intraday_df['Date'].map(lambda d: safe_prev_range_lookup(d, prev_range_series))
 
             def safe_calc(row):
                 try:
+                    # Debug info for rare rows to detect issues
+                    if np.random.rand() < 0.01:
+                        st.write(
+                            f"DEBUG row types - Open: {type(row['Open'])}, Close: {type(row['Close'])}, "
+                            f"Volume: {type(row['Volume'])}, PrevRange: {type(row['PrevRange'])}"
+                        )
                     return calculate_heaviness(
                         to_float_safe(row['Open']),
                         to_float_safe(row['Close']),
                         to_float_safe(row['Volume']),
                         to_float_safe(row['PrevRange']) if not pd.isna(row['PrevRange']) else np.nan
                     )
-                except Exception:
+                except Exception as e:
+                    st.write(f"DEBUG safe_calc error: {e}, row: {row.name}")
                     return np.nan
 
             intraday_df['H%'] = intraday_df.apply(safe_calc, axis=1)
