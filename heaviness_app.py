@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 # Heaviness indicator function (fixed to avoid Series truth value errors)
 def calculate_heaviness(open_price, close_price, volume, prev_day_range):
-    # Force scalars
+    # Force scalars if possible
     try:
         volume = float(volume)
     except Exception:
@@ -18,7 +18,8 @@ def calculate_heaviness(open_price, close_price, volume, prev_day_range):
     except Exception:
         return np.nan
 
-    if np.isnan(volume) or np.isnan(prev_day_range) or volume == 0 or prev_day_range == 0:
+    # Use pd.isna which safely handles scalars and Series
+    if pd.isna(volume) or pd.isna(prev_day_range) or volume == 0 or prev_day_range == 0:
         return np.nan
 
     delta_p_per_volume = (close_price - open_price) / volume
@@ -34,7 +35,8 @@ def backtest_heaviness(df, threshold=20, hold_minutes=15):
 
     for i in range(len(df) - hold_minutes):
         row = df.iloc[i]
-        if np.isnan(row['H%']):
+
+        if pd.isna(row['H%']):
             continue
 
         if position is None and row['H%'] < threshold:
@@ -45,7 +47,6 @@ def backtest_heaviness(df, threshold=20, hold_minutes=15):
             entry_time = row.name
 
         elif position is not None:
-            # Calculate timedelta safely
             delta = row.name - entry_time
             if isinstance(delta, pd.Timedelta) and delta >= timedelta(minutes=hold_minutes):
                 exit_price = df.iloc[i]['Close']
