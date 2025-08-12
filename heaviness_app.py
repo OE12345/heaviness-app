@@ -7,7 +7,8 @@ import matplotlib.pyplot as plt
 
 # Heaviness indicator function
 def calculate_heaviness(open_price, close_price, volume, prev_day_range):
-    if volume == 0 or prev_day_range == 0:
+    # Handle NaN and zero cases safely
+    if pd.isna(volume) or pd.isna(prev_day_range) or volume == 0 or prev_day_range == 0:
         return np.nan
     delta_p_per_volume = (close_price - open_price) / volume
     heaviness = (delta_p_per_volume / prev_day_range) * 100
@@ -61,12 +62,20 @@ if st.button("Run Analysis"):
         # Calculate H%
         daily = yf.download(ticker, start=start_date - timedelta(days=2), end=end_date, interval='1d', progress=False)
         prev_day_range = daily['High'].shift(1) - daily['Low'].shift(1)
+
         intraday_df = data.copy()
         intraday_df['Date'] = intraday_df.index.date
-        intraday_df['PrevRange'] = intraday_df['Date'].map(lambda d: prev_day_range.get(d, np.nan))
+        
+        # FIX: Ensure PrevRange is a scalar float
+        def get_prev_range(d):
+            matches = prev_day_range.loc[prev_day_range.index.date == d]
+            return float(matches.values[0]) if len(matches) > 0 else np.nan
+        
+        intraday_df['PrevRange'] = intraday_df['Date'].map(get_prev_range)
+
         intraday_df['H%'] = [
             calculate_heaviness(row['Open'], row['Close'], row['Volume'], row['PrevRange'])
-            for i, row in intraday_df.iterrows()
+            for _, row in intraday_df.iterrows()
         ]
 
         st.write("Sample Data with H%")
@@ -95,5 +104,4 @@ if st.button("Run Analysis"):
             ax.set_xlabel("Time")
             ax.legend()
             st.pyplot(fig)
-			
-			
+
