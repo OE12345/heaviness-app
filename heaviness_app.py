@@ -8,9 +8,9 @@ from typing import Optional
 
 
 def calculate_heaviness(
-    open_price: float, 
-    close_price: float, 
-    volume: float, 
+    open_price: float,
+    close_price: float,
+    volume: float,
     prev_day_range: float
 ) -> Optional[float]:
     """
@@ -29,13 +29,12 @@ def calculate_heaviness(
         return max(0.0, min(100.0, heaviness_score))
 
     except Exception:
-        # Log if desired, here we silently return None for invalid inputs
         return None
 
 
 def backtest_heaviness(
-    df: pd.DataFrame, 
-    threshold: float = 20.0, 
+    df: pd.DataFrame,
+    threshold: float = 20.0,
     hold_minutes: int = 15
 ) -> pd.DataFrame:
     """
@@ -53,7 +52,7 @@ def backtest_heaviness(
         if pd.isna(h_value) or h_value is None:
             continue
 
-        timestamp = current_row.name
+        timestamp = pd.Timestamp(current_row.name)
 
         if position is None and h_value < threshold:
             position = {
@@ -64,7 +63,7 @@ def backtest_heaviness(
 
         if position is not None:
             elapsed = timestamp - position['entry_time']
-            if elapsed >= timedelta(minutes=hold_minutes):
+            if isinstance(elapsed, pd.Timedelta) and elapsed >= timedelta(minutes=hold_minutes):
                 exit_price = current_row['Close']
                 trade_return = (exit_price - position['entry_price']) / position['entry_price']
                 trades.append({
@@ -94,7 +93,13 @@ def load_daily_data(ticker: str, start_date: datetime, end_date: datetime) -> pd
     Download daily OHLC data and compute previous day range (High - Low) shifted by one day.
     Returns a Series indexed by date.
     """
-    daily = yf.download(ticker, start=start_date - timedelta(days=5), end=end_date + timedelta(days=1), interval='1d', progress=False)
+    daily = yf.download(
+        ticker,
+        start=start_date - timedelta(days=5),
+        end=end_date + timedelta(days=1),
+        interval='1d',
+        progress=False
+    )
     if daily.empty:
         raise ValueError(f"No daily data found for {ticker} between {start_date} and {end_date}")
 
@@ -129,7 +134,6 @@ def main():
             intraday_df['Date'] = intraday_df.index.date
             intraday_df['PrevRange'] = intraday_df['Date'].map(lambda d: prev_range_series.get(d, np.nan))
 
-            # Calculate heaviness indicator vectorized for speed and safety
             def safe_calc(row):
                 try:
                     return calculate_heaviness(
@@ -183,3 +187,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
