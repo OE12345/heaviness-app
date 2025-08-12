@@ -5,9 +5,9 @@ import numpy as np
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 
-# Heaviness indicator function with safe scalar conversion
+# Heaviness indicator function (fixed to avoid Series truth value errors)
 def calculate_heaviness(open_price, close_price, volume, prev_day_range):
-    # Force scalars to avoid ambiguous Series comparison
+    # Force scalars
     try:
         volume = float(volume)
     except Exception:
@@ -24,6 +24,7 @@ def calculate_heaviness(open_price, close_price, volume, prev_day_range):
     delta_p_per_volume = (close_price - open_price) / volume
     heaviness = (delta_p_per_volume / prev_day_range) * 100
     return max(0, min(100, 100 - abs(heaviness * 100)))
+
 
 # Backtest logic
 def backtest_heaviness(df, threshold=20, hold_minutes=15):
@@ -56,6 +57,7 @@ def backtest_heaviness(df, threshold=20, hold_minutes=15):
 
     return pd.DataFrame(trades)
 
+
 # Streamlit UI
 st.title("📉 Heaviness Indicator (H%) & Backtester")
 ticker = st.text_input("Enter Stock Ticker", value="AAPL")
@@ -70,24 +72,36 @@ if st.button("Run Analysis"):
     if data.empty:
         st.error("No data found. Try another ticker or date range.")
     else:
-        # Calculate H%
-        daily = yf.download(ticker, start=start_date - timedelta(days=2), end=end_date, interval='1d', progress=False)
+        # Get previous day range
+        daily = yf.download(
+            ticker,
+            start=start_date - timedelta(days=2),
+            end=end_date,
+            interval='1d',
+            progress=False
+        )
         prev_day_range = daily['High'].shift(1) - daily['Low'].shift(1)
+
+        def get_prev_range(d):
+            matches = prev_day_range.loc[prev_day_range.index.date == d]
+            if matches.empty:
+                return np.nan
+            return float(matches.iloc[0])
 
         intraday_df = data.copy()
         intraday_df['Date'] = intraday_df.index.date
-        
-        # Ensure PrevRange is scalar float
-        def get_prev_range(d):
-            matches = prev_day_range.loc[prev_day_range.index.date == d]
-            return float(matches.values[0]) if len(matches) > 0 else np.nan
-        
         intraday_df['PrevRange'] = intraday_df['Date'].map(get_prev_range)
 
-        intraday_df['H%'] = [
-            calculate_heaviness(row['Open'], row['Close'], row['Volume'], row['PrevRange'])
-            for _, row in intraday_df.iterrows()
-        ]
+        # Calculate H% safely
+        intraday_df['H%'] = intraday_df.apply(
+            lambda row: calculate_heaviness(
+                float(row['Open']),
+                float(row['Close']),
+                float(row['Volume']),
+                float(row['PrevRange']) if pd.notna(row['PrevRange']) else np.nan
+            ),
+            axis=1
+        )
 
         st.write("Sample Data with H%")
         st.dataframe(intraday_df[['Open', 'Close', 'Volume', 'H%']].tail(10))
