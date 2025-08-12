@@ -7,27 +7,25 @@ import matplotlib.pyplot as plt
 from typing import Optional
 
 
+def to_float_safe(val):
+    if isinstance(val, pd.Series):
+        return float(val.iloc[0])
+    return float(val)
+
+
 def calculate_heaviness(
     open_price: float,
     close_price: float,
     volume: float,
     prev_day_range: float
 ) -> Optional[float]:
-    """
-    Compute the heaviness indicator (H%) based on price and volume.
-    Returns a float between 0 and 100 or None if calculation not possible.
-    """
     try:
-        if volume <= 0 or prev_day_range <= 0:
+        if volume <= 0 or prev_day_range <= 0 or np.isnan(volume) or np.isnan(prev_day_range):
             return None
-
         delta_per_volume = (close_price - open_price) / volume
         heaviness_raw = (delta_per_volume / prev_day_range) * 100
         heaviness_score = 100 - abs(heaviness_raw * 100)
-
-        # Clamp result between 0 and 100
         return max(0.0, min(100.0, heaviness_score))
-
     except Exception:
         return None
 
@@ -37,11 +35,6 @@ def backtest_heaviness(
     threshold: float = 20.0,
     hold_minutes: int = 15
 ) -> pd.DataFrame:
-    """
-    Backtests trades based on heaviness indicator below threshold.
-    Entry when H% < threshold; exit after hold_minutes.
-    Returns a DataFrame of trades with returns.
-    """
     trades = []
     position = None
 
@@ -79,30 +72,30 @@ def backtest_heaviness(
 
 
 def load_data(ticker: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
-    """
-    Download intraday 1-minute data for ticker between start_date and end_date.
-    """
-    data = yf.download(ticker, start=start_date, end=end_date, interval='1m', progress=False)
+    data = yf.download(
+        ticker,
+        start=start_date,
+        end=end_date,
+        interval='1m',
+        progress=False,
+        auto_adjust=True  # <-- Explicit to silence warning
+    )
     if data.empty:
         raise ValueError(f"No intraday data found for {ticker} between {start_date} and {end_date}")
     return data
 
 
 def load_daily_data(ticker: str, start_date: datetime, end_date: datetime) -> pd.Series:
-    """
-    Download daily OHLC data and compute previous day range (High - Low) shifted by one day.
-    Returns a Series indexed by date.
-    """
     daily = yf.download(
         ticker,
         start=start_date - timedelta(days=5),
         end=end_date + timedelta(days=1),
         interval='1d',
-        progress=False
+        progress=False,
+        auto_adjust=True  # <-- Explicit to silence warning
     )
     if daily.empty:
         raise ValueError(f"No daily data found for {ticker} between {start_date} and {end_date}")
-
     prev_day_range = (daily['High'] - daily['Low']).shift(1).dropna()
     prev_day_range.index = prev_day_range.index.date
     return prev_day_range
@@ -137,10 +130,10 @@ def main():
             def safe_calc(row):
                 try:
                     return calculate_heaviness(
-                        float(row['Open']),
-                        float(row['Close']),
-                        float(row['Volume']),
-                        float(row['PrevRange']) if not pd.isna(row['PrevRange']) else np.nan
+                        to_float_safe(row['Open']),
+                        to_float_safe(row['Close']),
+                        to_float_safe(row['Volume']),
+                        to_float_safe(row['PrevRange']) if not pd.isna(row['PrevRange']) else np.nan
                     )
                 except Exception:
                     return np.nan
@@ -187,4 +180,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
